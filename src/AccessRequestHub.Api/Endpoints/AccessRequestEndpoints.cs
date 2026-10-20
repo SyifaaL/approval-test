@@ -18,6 +18,85 @@ public static class AccessRequestEndpoints
             => DecideAsync(id, body, isReject: false, ctx, db, cu, ct));
         app.MapPost("/api/requests/{id:guid}/reject", (Guid id, DecisionRequest body, HttpContext ctx, AppDbContext db, ICurrentUserAccessor cu, CancellationToken ct)
             => DecideAsync(id, body, isReject: true, ctx, db, cu, ct));
+
+        app.MapGet("/api/requests/mine", GetMineAsync);
+        app.MapGet("/api/inbox", GetInboxAsync);
+        app.MapGet("/api/requests/{id:guid}", GetDetailAsync);
+        app.MapGet("/api/requests", GetAllForAuditorAsync);
+    }
+
+    private static async Task<IResult> GetMineAsync(
+        HttpContext httpContext, AppDbContext db, ICurrentUserAccessor currentUserAccessor, CancellationToken ct)
+    {
+        var actor = await currentUserAccessor.ResolveAsync(httpContext, ct);
+
+        var items = await db.AccessRequests
+            .Include(r => r.Application)
+            .Where(r => r.RequesterId == actor.Id)
+            .OrderByDescending(r => r.CreatedAt)
+            .ToListAsync(ct);
+
+        return Results.Ok(items.Select(r => ToResponse(r, r.Application!, actor.Email)));
+    }
+
+    private static async Task<IResult> GetInboxAsync(
+        HttpContext httpContext, AppDbContext db, ICurrentUserAccessor currentUserAccessor, CancellationToken ct)
+    {
+        var actor = await currentUserAccessor.ResolveAsync(httpContext, ct);
+
+        var items = await db.AccessRequests
+            .Include(r => r.Application)
+            .Include(r => r.Requester)
+            .Where(r =>
+                (r.Status == RequestStatus.PendingManager && r.Requester!.ManagerId == actor.Id) ||
+                (r.Status == RequestStatus.PendingSystemOwner && r.Application!.OwnerUserId == actor.Id))
+            .OrderBy(r => r.CreatedAt)
+            .ToListAsync(ct);
+
+        return Results.Ok(items.Select(r => ToResponse(r, r.Application!, r.Requester!.Email)));
+    }
+
+    private static async Task<IResult> GetDetailAsync(
+        Guid id, HttpContext httpContext, AppDbContext db, ICurrentUserAccessor currentUserAccessor, CancellationToken ct)
+    {
+        var actor = await currentUserAccessor.ResolveAsync(httpContext, ct);
+
+        var request = await db.AccessRequests
+            .Include(r => r.Requester)
+            .Include(r => r.Application)
+            .FirstOrDefaultAsync(r => r.Id == id, ct);
+
+        if (request is null || !ApprovalPolicy.IsRelatedParty(actor, request))
+        {
+            throw new ResourceNotFoundException("Access request not found.");
+        }
+
+        var auditEvents = await db.AuditEvents
+            .Include(a => a.ActorUser)
+            .Where(a => a.RequestId == id)
+            .OrderBy(a => a.OccurredAt)
+            .ToListAsync(ct);
+
+        return Results.Ok(ToDetailResponse(request, auditEvents));
+    }
+
+    private static async Task<IResult> GetAllForAuditorAsync(
+        HttpContext httpContext, AppDbContext db, ICurrentUserAccessor currentUserAccessor, CancellationToken ct)
+    {
+        var actor = await currentUserAccessor.ResolveAsync(httpContext, ct);
+
+        if (!actor.IsAuditor)
+        {
+            throw new ForbiddenException("Only an auditor may list all access requests.");
+        }
+
+        var items = await db.AccessRequests
+            .Include(r => r.Application)
+            .Include(r => r.Requester)
+            .OrderByDescending(r => r.CreatedAt)
+            .ToListAsync(ct);
+
+        return Results.Ok(items.Select(r => ToResponse(r, r.Application!, r.Requester!.Email)));
     }
 
     private static async Task<IResult> CreateAsync(
@@ -107,7 +186,7 @@ public static class AccessRequestEndpoints
         try
         {
             await db.SaveChangesAsync(ct);
-            return Results.Created($"/api/requests/{newRequest.Id}", ToResponse(newRequest, application));
+            return Results.Created($"/api/requests/{newRequest.Id}", ToResponse(newRequest, application, actor.Email));
         }
         catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
         {
@@ -131,7 +210,7 @@ public static class AccessRequestEndpoints
                     "clientRequestId was already used to create a request with a different payload.");
             }
 
-            return Results.Ok(ToResponse(existing, application));
+            return Results.Ok(ToResponse(existing, application, actor.Email));
         }
     }
 
@@ -224,15 +303,16 @@ public static class AccessRequestEndpoints
         await tx.CommitAsync(ct);
 
         var updated = await db.AccessRequests.AsNoTracking().FirstAsync(r => r.Id == id, ct);
-        return Results.Ok(ToResponse(updated, request.Application!));
+        return Results.Ok(ToResponse(updated, request.Application!, request.Requester!.Email));
     }
 
     private static bool IsUniqueConstraintViolation(DbUpdateException ex) =>
         ex.InnerException is SqliteException { SqliteExtendedErrorCode: 2067 };
 
-    private static AccessRequestResponse ToResponse(AccessRequest r, Application application) => new(
+    private static AccessRequestResponse ToResponse(AccessRequest r, Application application, string requesterEmail) => new(
         r.Id,
         r.ClientRequestId,
+        requesterEmail,
         application.Name,
         r.Environment.ToString(),
         r.AccessLevel.ToString(),
@@ -244,4 +324,30 @@ public static class AccessRequestEndpoints
         r.Version,
         r.CreatedAt,
         r.UpdatedAt);
+
+    private static AccessRequestDetailResponse ToDetailResponse(AccessRequest r, IReadOnlyList<AuditEvent> auditEvents) => new(
+        r.Id,
+        r.ClientRequestId,
+        r.Requester!.Email,
+        r.Application!.Name,
+        r.Environment.ToString(),
+        r.AccessLevel.ToString(),
+        r.Justification,
+        r.Status.ToString(),
+        r.PolicyVersion,
+        r.IsHighRisk,
+        r.RejectionReason,
+        r.Version,
+        r.CreatedAt,
+        r.UpdatedAt,
+        auditEvents.Select(a => new AuditEventResponse(
+            a.Id,
+            a.EventType,
+            a.ActorUser!.Email,
+            a.FromStatus?.ToString(),
+            a.ToStatus.ToString(),
+            a.Reason,
+            a.RequestVersionAfter,
+            a.CorrelationId,
+            a.OccurredAt)).ToList());
 }

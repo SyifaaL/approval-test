@@ -37,6 +37,7 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
+app.MapUserEndpoints();
 app.MapAccessRequestEndpoints();
 
 app.Run();
