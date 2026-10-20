@@ -61,4 +61,6 @@ xUnit + `WebApplicationFactory<Program>`, SQLite file temp per test class (bukan
 
 ## 7. Perubahan plan selama implementasi
 
-_(diisi berjalannya waktu — setiap deviasi dari rencana di atas dicatat di sini dengan alasannya)_
+- **Frontend sempat dipertimbangkan pindah ke React + Redux Toolkit**, lalu dibatalkan dan kembali ke rencana awal (vanilla JS, no build step di section 3). Alasan: scope assessment kecil, dinilai dari correctness backend bukan kompleksitas frontend; build step tambahan tidak menambah nilai penilaian. Lihat AI_USAGE.md interaksi #1.
+- **Sempat dipertimbangkan migrasi SQLite → PostgreSQL**, dibatalkan setelah klarifikasi — kebutuhan sebenarnya cuma tooling untuk melihat data (disediakan via DB Browser for SQLite), bukan masalah dengan SQLite itu sendiri. Keputusan trade-off #1 di section 6 tetap berlaku. Lihat AI_USAGE.md interaksi #2.
+- Tidak ada perubahan pada data model, domain logic, atau urutan error handling dari rencana awal — keenam keputusan di section 2 dan arsitektur di section 3 diimplementasikan persis seperti direncanakan, divalidasi lewat 28 automated test di Fase E.
