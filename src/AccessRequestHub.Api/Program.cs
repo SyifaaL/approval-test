@@ -1,3 +1,4 @@
+using AccessRequestHub.Api.Auth;
 using AccessRequestHub.Api.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,6 +9,7 @@ builder.Services.AddOpenApi();
 var connectionString = builder.Configuration.GetConnectionString("Default")
     ?? "Data Source=accessrequesthub.db";
 builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlite(connectionString));
+builder.Services.AddScoped<ICurrentUserAccessor, CurrentUserAccessor>();
 
 var app = builder.Build();
 
