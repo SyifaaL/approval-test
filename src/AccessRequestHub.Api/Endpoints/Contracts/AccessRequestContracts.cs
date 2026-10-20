@@ -7,6 +7,8 @@ public record CreateAccessRequestRequest(
     string? AccessLevel,
     string? Justification);
 
+public record DecisionRequest(int? ExpectedVersion, string? Reason);
+
 public record AccessRequestResponse(
     Guid Id,
     string ClientRequestId,

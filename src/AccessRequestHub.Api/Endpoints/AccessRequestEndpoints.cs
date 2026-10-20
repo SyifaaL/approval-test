@@ -14,6 +14,10 @@ public static class AccessRequestEndpoints
     public static void MapAccessRequestEndpoints(this WebApplication app)
     {
         app.MapPost("/api/requests", CreateAsync);
+        app.MapPost("/api/requests/{id:guid}/approve", (Guid id, DecisionRequest body, HttpContext ctx, AppDbContext db, ICurrentUserAccessor cu, CancellationToken ct)
+            => DecideAsync(id, body, isReject: false, ctx, db, cu, ct));
+        app.MapPost("/api/requests/{id:guid}/reject", (Guid id, DecisionRequest body, HttpContext ctx, AppDbContext db, ICurrentUserAccessor cu, CancellationToken ct)
+            => DecideAsync(id, body, isReject: true, ctx, db, cu, ct));
     }
 
     private static async Task<IResult> CreateAsync(
@@ -129,6 +133,98 @@ public static class AccessRequestEndpoints
 
             return Results.Ok(ToResponse(existing, application));
         }
+    }
+
+    private static async Task<IResult> DecideAsync(
+        Guid id,
+        DecisionRequest body,
+        bool isReject,
+        HttpContext httpContext,
+        AppDbContext db,
+        ICurrentUserAccessor currentUserAccessor,
+        CancellationToken ct)
+    {
+        var actor = await currentUserAccessor.ResolveAsync(httpContext, ct);
+
+        var request = await db.AccessRequests
+            .Include(r => r.Requester)
+            .Include(r => r.Application)
+            .FirstOrDefaultAsync(r => r.Id == id, ct);
+
+        if (request is null || !ApprovalPolicy.IsRelatedParty(actor, request))
+        {
+            // Unrelated callers get 404 instead of 403 so request ids cannot be enumerated/probed.
+            throw new ResourceNotFoundException("Access request not found.");
+        }
+
+        if (request.Status is RequestStatus.Approved or RequestStatus.Rejected)
+        {
+            throw new InvalidStateException($"Request is already {request.Status} and cannot be processed further.");
+        }
+
+        if (!ApprovalPolicy.CanDecide(actor, request))
+        {
+            throw new ForbiddenException("You are not the approver for this request's current stage.");
+        }
+
+        if (isReject && string.IsNullOrWhiteSpace(body.Reason))
+        {
+            throw new ValidationException("reason is required to reject a request.");
+        }
+
+        if (body.ExpectedVersion is null)
+        {
+            throw new ValidationException("expectedVersion is required.");
+        }
+
+        var currentStatus = request.Status;
+        var nextStatus = isReject ? ApprovalPolicy.NextOnReject(request) : ApprovalPolicy.NextOnApprove(request);
+        var rejectionReason = isReject ? body.Reason!.Trim() : null;
+        var now = DateTime.UtcNow;
+        var expectedVersion = body.ExpectedVersion.Value;
+        var correlationId = httpContext.Items.TryGetValue(CorrelationIdMiddleware.ItemsKey, out var cid)
+            ? cid?.ToString() ?? string.Empty
+            : string.Empty;
+
+        // Read + authorization happened above on plain (non-transactional) queries. The transaction
+        // below exists only to make the conditional UPDATE and the audit insert atomic, and the
+        // UPDATE is its first statement — reading inside the transaction first would upgrade a
+        // read lock to a write lock mid-transaction, which causes spurious SQLITE_BUSY under
+        // concurrent requests instead of a clean 409.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        var affected = await db.AccessRequests
+            .Where(r => r.Id == id && r.Version == expectedVersion && r.Status == currentStatus)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(r => r.Status, nextStatus)
+                .SetProperty(r => r.Version, r => r.Version + 1)
+                .SetProperty(r => r.UpdatedAt, now)
+                .SetProperty(r => r.RejectionReason, rejectionReason), ct);
+
+        if (affected == 0)
+        {
+            throw new VersionConflictException(
+                "Request was modified by someone else since you loaded it. Refresh and try again.");
+        }
+
+        db.AuditEvents.Add(new AuditEvent
+        {
+            RequestId = id,
+            EventType = isReject ? "Rejected" : "Approved",
+            ActorUserId = actor.Id,
+            FromStatus = currentStatus,
+            ToStatus = nextStatus,
+            Reason = rejectionReason,
+            RequestVersionAfter = expectedVersion + 1,
+            CorrelationId = correlationId,
+            OccurredAt = now,
+        });
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+
+        var updated = await db.AccessRequests.AsNoTracking().FirstAsync(r => r.Id == id, ct);
+        return Results.Ok(ToResponse(updated, request.Application!));
     }
 
     private static bool IsUniqueConstraintViolation(DbUpdateException ex) =>
