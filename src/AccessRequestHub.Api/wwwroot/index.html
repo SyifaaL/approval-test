@@ -1,5 +1,25 @@
 ﻿<!doctype html>
-<html>
-<head><meta charset="utf-8"><title>Access Request Hub</title></head>
-<body><h1>Access Request Hub</h1><p>UI placeholder - dibangun di Fase 5.</p></body>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Access Request Hub</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Access Request Hub</h1>
+    <nav id="nav">
+      <a href="#/new" data-route="/new">New Request</a>
+      <a href="#/mine" data-route="/mine">My Requests</a>
+      <a href="#/inbox" data-route="/inbox">Approval Inbox</a>
+    </nav>
+    <div class="user-switcher">
+      <label for="user-select">Logged in as</label>
+      <select id="user-select"></select>
+    </div>
+  </header>
+  <main id="app" aria-live="polite"></main>
+  <script src="app.js"></script>
+</body>
 </html>
