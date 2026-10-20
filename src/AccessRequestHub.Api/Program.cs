@@ -1,5 +1,6 @@
 using AccessRequestHub.Api.Auth;
 using AccessRequestHub.Api.Data;
+using AccessRequestHub.Api.Endpoints;
 using AccessRequestHub.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
@@ -36,6 +37,7 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
+app.MapAccessRequestEndpoints();
 
 app.Run();
 
