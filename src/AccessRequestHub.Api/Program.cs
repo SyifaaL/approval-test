@@ -1,5 +1,6 @@
 using AccessRequestHub.Api.Auth;
 using AccessRequestHub.Api.Data;
+using AccessRequestHub.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -10,6 +11,9 @@ var connectionString = builder.Configuration.GetConnectionString("Default")
     ?? "Data Source=accessrequesthub.db";
 builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlite(connectionString));
 builder.Services.AddScoped<ICurrentUserAccessor, CurrentUserAccessor>();
+
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
 
 var app = builder.Build();
 
@@ -24,6 +28,9 @@ using (var scope = app.Services.CreateScope())
     db.Database.Migrate();
     Seeder.Seed(db);
 }
+
+app.UseExceptionHandler();
+app.UseMiddleware<CorrelationIdMiddleware>();
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
